@@ -1,8 +1,8 @@
 ﻿using System;
 using System.Collections.Generic;
+using System.Reactive;
 using System.Reactive.Concurrency;
 using System.Reactive.Linq;
-using System.Reactive.Subjects;
 
 namespace RxFlow
 {
@@ -13,13 +13,15 @@ namespace RxFlow
             return source.Retry<T, Exception>(retryCount, null, delaySpan, Scheduler.Default);
         }
 
-        public static IObservable<T> Retry<T, TException>(this IObservable<T> source, int retryCount, Action<TException> exAction, TimeSpan delaySpan)
+        public static IObservable<T> Retry<T, TException>(this IObservable<T> source, int retryCount,
+            Action<TException> exAction, TimeSpan delaySpan)
             where TException : Exception
         {
             return source.Retry(retryCount, exAction, delaySpan, Scheduler.Default);
         }
 
-        public static IObservable<T> Retry<T, TException>(this IObservable<T> source, int retryCount, Action<TException> exAction, TimeSpan delaySpan, IScheduler scheduler)
+        public static IObservable<T> Retry<T, TException>(this IObservable<T> source, int retryCount,
+            Action<TException> exAction, TimeSpan delaySpan, IScheduler scheduler)
             where TException : Exception
         {
             return source.Catch((TException ex) =>
@@ -32,13 +34,16 @@ namespace RxFlow
                         Observable.Timer(delaySpan, scheduler)
                             .SelectMany(_ => source.Retry(retryCount, exAction, delaySpan, scheduler));
 
-                int nowRetryCount = 1;
+                var nowRetryCount = 1;
 
-                return Observable.Timer(delaySpan, scheduler).SelectMany(_ => source.Retry(retryCount, exAction, delaySpan, scheduler, nowRetryCount));
+                return
+                    Observable.Timer(delaySpan, scheduler)
+                        .SelectMany(_ => source.Retry(retryCount, exAction, delaySpan, scheduler, nowRetryCount));
             });
         }
 
-        private static IObservable<T> Retry<T, TException>(this IObservable<T> source, int retryCount, Action<TException> exAction, TimeSpan delaySpan, IScheduler scheduler, int nowRetryCount)
+        private static IObservable<T> Retry<T, TException>(this IObservable<T> source, int retryCount,
+            Action<TException> exAction, TimeSpan delaySpan, IScheduler scheduler, int nowRetryCount)
             where TException : Exception
         {
             return source.Catch((TException ex) =>
@@ -76,22 +81,88 @@ namespace RxFlow
             return Junction(source, _ => true, _ => _, branch);
         }
 
-        public static IObservable<T> Junction<T>(this IObservable<T> source, Func<T, bool> branchSelector, IObserver<T> branch)
+        public static IObservable<T> Junction<T>(this IObservable<T> source, Func<T, bool> branchSelector,
+            IObserver<T> branch)
         {
             return Junction(source, branchSelector, _ => _, branch);
         }
 
-        public static IObservable<TIn> Junction<TIn, TOut>(this IObservable<TIn> source, Func<TIn, TOut> converter, IObserver<TOut> branch)
+        public static IObservable<TIn> Junction<TIn, TOut>(this IObservable<TIn> source, Func<TIn, TOut> converter,
+            IObserver<TOut> branch)
         {
             return Junction(source, _ => true, converter, branch);
         }
 
-        public static IObservable<TIn> Junction<TIn, TOut>(this IObservable<TIn> source, Func<TIn, bool> branchSelector, Func<TIn, TOut> converter, IObserver<TOut> branch)
+        public static IObservable<TIn> Junction<TIn, TOut>(this IObservable<TIn> source, Func<TIn, bool> branchSelector,
+            Func<TIn, TOut> converter, IObserver<TOut> branch)
         {
-            var result = new ReplaySubject<TIn>();
-            source.Where(branchSelector).Select(converter).Subscribe(branch);
-            source.Where(value => !branchSelector(value)).Subscribe(result);
-            return result;
+            return new AnonymousObservable<TIn>(observer =>
+            {
+                return source.Subscribe(new AnonymousObserver<TIn>(value =>
+                {
+                    if (branchSelector(value))
+                    {
+                        branch.OnNext(converter(value));
+                    }
+                    else
+                    {
+                        observer.OnNext(value);
+                    }
+                },
+                    ex =>
+                    {
+                        branch.OnError(ex);
+                        observer.OnError(ex);
+                    },
+                    () =>
+                    {
+                        branch.OnCompleted();
+                        observer.OnCompleted();
+                    }));
+            });
+        }
+
+        public static IObservable<T> Distribution<T>(this IObservable<T> source, IObserver<T> branch)
+        {
+            return Distribution(source, _ => true, _ => _, branch);
+        }
+
+        public static IObservable<T> Distribution<T>(this IObservable<T> source, Func<T, bool> branchSelector,
+            IObserver<T> branch)
+        {
+            return Distribution(source, branchSelector, _ => _, branch);
+        }
+
+        public static IObservable<TIn> Distribution<TIn, TOut>(this IObservable<TIn> source, Func<TIn, TOut> converter,
+            IObserver<TOut> branch)
+        {
+            return Distribution(source, _ => true, converter, branch);
+        }
+
+        public static IObservable<TIn> Distribution<TIn, TOut>(this IObservable<TIn> source,
+            Func<TIn, bool> branchSelector, Func<TIn, TOut> converter, IObserver<TOut> branch)
+        {
+            return new AnonymousObservable<TIn>(observer =>
+            {
+                return source.Subscribe(new AnonymousObserver<TIn>(value =>
+                {
+                    if (branchSelector(value))
+                    {
+                        branch.OnNext(converter(value));
+                    }
+                    observer.OnNext(value);
+                },
+                    ex =>
+                    {
+                        branch.OnError(ex);
+                        observer.OnError(ex);
+                    },
+                    () =>
+                    {
+                        branch.OnCompleted();
+                        observer.OnCompleted();
+                    }));
+            });
         }
     }
 }

@@ -1,99 +1,134 @@
 ﻿using System;
-using System.Collections.Generic;
-using System.Linq;
-using System.Reactive.Linq;
+using System.Reactive;
 using System.Reactive.Subjects;
-using System.Text;
-using System.Threading;
-using System.Threading.Tasks;
 
 namespace RxFlow
 {
-    public interface IBranch { }
-    public interface IBranch<in T> : ISubject<T, object>, IBranch
-        where T : class { }
-    public class Branch<T> : IBranch<T> where T : class
+    public static class Branch
     {
-        private int _referenceSequenceCount = 0;
-        private int _calledOnCompletedCount = 0;
+        public static Branch<T> CreateBranch<T>(Func<IObservable<T>, IDisposable> sequenceFactory)
+        {
+            var result = Branch<T>.CreateBranch(sequenceFactory);
+            return result;
+        }
+    }
 
-        public static Branch<T> CreateBranch(Func<IObservable<T>, IObservable<object>> sequenceFactory)
+    public class Branch<T>
+    {
+        private readonly Func<IObservable<T>, IDisposable> _sequenceFactory;
+
+        protected Branch(Func<IObservable<T>, IDisposable> sequenceFactory)
+        {
+            _sequenceFactory = sequenceFactory;
+        }
+
+        public static Branch<T> CreateBranch(Func<IObservable<T>, IDisposable> sequenceFactory)
         {
             return new Branch<T>(sequenceFactory);
         }
-        public IObservable<object> Sequence { get; set; }
-        protected ISubject<T> Subject { get; set; }
-        protected Branch(Func<IObservable<T>, IObservable<object>> sequenceFactory)
-        {
-            Subject = new ReplaySubject<T>();
-            Sequence = sequenceFactory(Subject);
-        }
 
-        public void IncrementReferencedSequenceCount()
+        public IObserver<T> GetObserver()
         {
-            Interlocked.Increment(ref _referenceSequenceCount);
-        }
-        private void IncrementCalledOnCompletedCount()
-        {
-            Interlocked.Increment(ref _calledOnCompletedCount);
-        }
-
-        public int ReferencedSequenceCount { get { return _referenceSequenceCount; } }
-        public int CalledOnCompletedCount { get { return _calledOnCompletedCount; } }
-
-        public IDisposable Subscribe(IObserver<object> observer)
-        {
-            return Sequence.Subscribe(observer);
-        }
-
-        public void OnCompleted()
-        {
-            IncrementCalledOnCompletedCount();
-            if (CalledOnCompletedCount == ReferencedSequenceCount)
-            {
-                Subject.OnCompleted();
-            }
-        }
-
-        public void OnError(Exception error)
-        {
-            Subject.OnError(error);
-        }
-
-        public void OnNext(T value)
-        {
-            Subject.OnNext(value);
+            var subject = new ReplaySubject<T>();
+            _sequenceFactory(subject);
+            return subject;
         }
     }
 
     public static class BranchExtensions
     {
         public static IObservable<T> Junction<T>(this IObservable<T> source, Branch<T> branch)
-           where T : class
+            where T : class
         {
             return Junction(source, _ => true, _ => _, branch);
         }
 
-        public static IObservable<T> Junction<T>(this IObservable<T> source, Func<T, bool> branchSelector, Branch<T> branch)
-            where T : class
+        public static IObservable<T> Junction<T>(this IObservable<T> source, Func<T, bool> branchSelector,
+            Branch<T> branch)
         {
             return Junction(source, branchSelector, _ => _, branch);
         }
 
-        public static IObservable<TIn> Junction<TIn, TOut>(this IObservable<TIn> source, Func<TIn, TOut> converter, Branch<TOut> branch)
-            where TOut : class
+        public static IObservable<TIn> Junction<TIn, TOut>(this IObservable<TIn> source, Func<TIn, TOut> converter,
+            Branch<TOut> branch)
         {
             return Junction(source, _ => true, converter, branch);
         }
 
-        public static IObservable<TIn> Junction<TIn, TOut>(this IObservable<TIn> source, Func<TIn, bool> branchSelector, Func<TIn, TOut> converter, Branch<TOut> branch)
-            where TOut : class
+        public static IObservable<TIn> Junction<TIn, TOut>(this IObservable<TIn> source, Func<TIn, bool> branchSelector,
+            Func<TIn, TOut> converter, Branch<TOut> branch)
         {
-            var result = new ReplaySubject<TIn>();
-            branch.IncrementReferencedSequenceCount();
-            source.Where(branchSelector).Select(converter).Subscribe(branch);
-            source.Where(value => !branchSelector(value)).Subscribe(result);
-            return result;
+            var branchObserver = branch.GetObserver();
+            return new AnonymousObservable<TIn>(observer =>
+            {
+                return source.Subscribe(new AnonymousObserver<TIn>(
+                    value =>
+                    {
+                        if (branchSelector(value))
+                        {
+                            branchObserver.OnNext(converter(value));
+                        }
+                        else
+                        {
+                            observer.OnNext(value);
+                        }
+                    },
+                    ex =>
+                    {
+                        branchObserver.OnError(ex);
+                        observer.OnError(ex);
+                    },
+                    () =>
+                    {
+                        branchObserver.OnCompleted();
+                        observer.OnCompleted();
+                    }));
+            });
+        }
+
+        public static IObservable<T> Distribution<T>(this IObservable<T> source, Branch<T> branch)
+        {
+            return Distribution(source, _ => true, _ => _, branch);
+        }
+
+        public static IObservable<T> Distribution<T>(this IObservable<T> source, Func<T, bool> branchSelector,
+            Branch<T> branch)
+        {
+            return Distribution(source, branchSelector, _ => _, branch);
+        }
+
+        public static IObservable<TIn> Distribution<TIn, TOut>(this IObservable<TIn> source, Func<TIn, TOut> converter,
+            Branch<TOut> branch)
+        {
+            return Distribution(source, _ => true, converter, branch);
+        }
+
+        public static IObservable<TIn> Distribution<TIn, TOut>(this IObservable<TIn> source,
+            Func<TIn, bool> branchSelector, Func<TIn, TOut> converter, Branch<TOut> branch)
+        {
+            var branchObserver = branch.GetObserver();
+            return new AnonymousObservable<TIn>(observer =>
+            {
+                return source.Subscribe(new AnonymousObserver<TIn>(
+                    value =>
+                    {
+                        if (branchSelector(value))
+                        {
+                            branchObserver.OnNext(converter(value));
+                        }
+                        observer.OnNext(value);
+                    },
+                    ex =>
+                    {
+                        branchObserver.OnError(ex);
+                        observer.OnError(ex);
+                    },
+                    () =>
+                    {
+                        branchObserver.OnCompleted();
+                        observer.OnCompleted();
+                    }));
+            });
         }
     }
 }
