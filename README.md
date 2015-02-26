@@ -8,47 +8,125 @@ Simple Flow Control Library with Rx(Reactive Extensions).
 * Xamarin.Android
 * Xamarin.iOS
 
-##SimpleUsage
+##Simple Usage
+####Junction
+Switch sequence.Switched value not flowed backward.
 ```csharp
-//Box<T> is ValueTypeWrapper in RxFlow
-private static void Main(string[] args)
+static void Sample1()
 {
-    var context = new FlowContext();
+	var branchA = Branch.CreateBranch<int>(input =>
+        input.Do(i => Console.WriteLine("branchA :" + i))
+        .Subscribe());
 
-    var branchA = context.CreateBranch<Box<int>>(source =>
-        source.Select(i => i + " As String")
-            .Do(i => Console.WriteLine("Branch A: " + i))
-        );
+    var branchB = Branch.CreateBranch<int>(input =>
+        input.Do(i => Console.WriteLine("branchB :" + i))
+        .Subscribe());
 
-    var branchB = context.CreateBranch<Box<int>>(source =>
-        source.Select(i => TimeSpan.FromSeconds(i.Value).ToBox())
-            .Do(i => Console.WriteLine("Branch B: " + i.Value.ToString()))
-        );
-
-    //MainFlow
-    context.CreateSequence(Enumerable.Range(1, 10).ToObservable().ToBox(), i =>
-        i.Junction(e => e.Value%2 == 0, branchA) // to branchA
-            .Junction(e => e.Value%3 == 0, branchB) // to branchB
-            .Do(e => Console.WriteLine("Flow: " + e.Value))
-        );
-
-    context.Start();
-    Console.Read();
+    Observable.Range(1, 10)
+        .Junction(i => i % 2 == 0, branchA)
+        .Junction(i => i % 3 == 0, branchB)
+        .Subscribe();
 }
 
-    /*output
-     * Flow: 1
-     * Branch A: 2 As String
-     * Branch B: 00:00:03
-     * Branch A: 4 As String
-     * Flow: 5
-     * Branch A: 6 As String
-     * Flow: 7
-     * Branch A: 8 As String
-     * Branch B: 00:00:09
-     * Branch A: 10 As String
-    */
+/*output
+* branchA :2
+* branchB :3
+* branchA :4
+* branchA :6 // Not processed in branchB
+* branchA :8
+* branchB :9
+* branchA :10
+*/
 ```
-Flow to Branch (1 to Many and Many to Many) Supported.
+####Distribution
+Distribute sequence.Distributed value flowed backward.
+```csharp
+static void Sample2()
+{
+    var branchA = Branch.CreateBranch<int>(input =>
+        input.Do(i => Console.WriteLine("branchA :" + i))
+        .Subscribe());
+
+    var branchB = Branch.CreateBranch<int>(input =>
+        input.Do(i => Console.WriteLine("branchB :" + i))
+        .Subscribe());
+
+    Observable.Range(1, 10)
+        .Distribution(i => i % 2 == 0, branchA)
+        .Distribution(i => i % 3 == 0, branchB)
+        .Subscribe();
+}
+
+/*output
+* branchA :2
+* branchB :3
+* branchA :4
+* branchA :6 //processed in branchA
+* branchB :6 //processed in branchB
+* branchA :8
+* branchB :9
+* branchA :10
+*/
+```
+####Many to Many
+Many main sequences to many branches.
+```csharp
+static void Sample3()
+{
+    var branchA = Branch.CreateBranch<int>(input =>
+        input.Do(i => Console.WriteLine("branchA :" + i))
+        .Subscribe());
+
+    var branchB = Branch.CreateBranch<int>(input =>
+        input.Do(i => Console.WriteLine("branchB :" + i))
+        .Subscribe());
+
+    Observable.Range(1, 5)
+        .Distribution(i => i % 2 == 0, branchA)
+        .Distribution(i => i % 3 == 0, branchB)
+        .Subscribe();
+
+    Observable.Range(6, 5)
+        .Distribution(i => i % 2 == 0, branchA)
+        .Distribution(i => i % 3 == 0, branchB)
+        .Subscribe();
+}
+
+/*output
+* branchA :2
+* branchB :3
+* branchA :4
+* branchA :6
+* branchB :6
+* branchA :8
+* branchB :9
+* branchA :10
+*/
+```
+####Branch to Branch
+```csharp
+static void Sample4()
+{
+    var branchA = Branch.CreateBranch<int>(input =>
+        input.Do(i => Console.WriteLine("branchA :" + i))
+        .Subscribe());
+
+    var branchB = Branch.CreateBranch<int>(input =>
+        input.Do(i => Console.WriteLine("branchB :" + i))
+        .Junction(i => i % 2 == 0, branchA)
+        .Subscribe());
+
+    Observable.Range(1, 10)
+        .Junction(i => i % 3 == 0, branchB)
+        .Subscribe();
+}
+
+/*output
+branchB :3
+branchB :6
+branchA :6 //branchB to branchA
+branchB :9
+*/
+```
 ##License
 MIT License
